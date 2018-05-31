@@ -89,6 +89,7 @@ data:
           namespace: default
           port: incoming
           service: l5d
+          hostNetwork: true
       servers:
       - port: 4140
         ip: 0.0.0.0
