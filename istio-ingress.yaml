@@ -1,0 +1,741 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+ name: istio-system
+---
+# Source: istio/charts/ingressgateway/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: istio-ingressgateway-service-account
+  namespace: istio-system
+  labels:
+    app: ingressgateway
+    chart: ingressgateway-0.8.0
+    heritage: Tiller
+    release: RELEASE-NAME
+
+---
+# Source: istio/charts/pilot/templates/serviceaccount.yaml
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: istio-pilot-service-account
+  namespace: istio-system
+  labels:
+    app: istio-pilot
+    chart: pilot-0.8.0
+    heritage: Tiller
+    release: RELEASE-NAME
+
+---
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: virtualservices.networking.istio.io
+  labels:
+    app: istio-pilot
+spec:
+  group: networking.istio.io
+  names:
+    kind: VirtualService
+    listKind: VirtualServiceList
+    plural: virtualservices
+    singular: virtualservice
+  scope: Namespaced
+  version: v1alpha3
+---
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: destinationrules.networking.istio.io
+  labels:
+    app: istio-pilot
+spec:
+  group: networking.istio.io
+  names:
+    kind: DestinationRule
+    listKind: DestinationRuleList
+    plural: destinationrules
+    singular: destinationrule
+  scope: Namespaced
+  version: v1alpha3
+---
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: serviceentries.networking.istio.io
+  labels:
+    app: istio-pilot
+spec:
+  group: networking.istio.io
+  names:
+    kind: ServiceEntry
+    listKind: ServiceEntryList
+    plural: serviceentries
+    singular: serviceentry
+  scope: Namespaced
+  version: v1alpha3
+---
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: gateways.networking.istio.io
+  labels:
+    app: istio-pilot
+spec:
+  group: networking.istio.io
+  names:
+    kind: Gateway
+    plural: gateways
+    singular: gateway
+  scope: Namespaced
+  version: v1alpha3
+---
+# Source: istio/charts/pilot/templates/clusterrole.yaml
+
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  name: istio-pilot-istio-system
+  namespace: istio-system
+  labels:
+    app: istio-pilot
+    chart: pilot-0.8.0
+    heritage: Tiller
+    release: RELEASE-NAME
+rules:
+- apiGroups: ["config.istio.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["networking.istio.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["authentication.istio.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["*"]
+- apiGroups: ["extensions"]
+  resources: ["thirdpartyresources", "thirdpartyresources.extensions", "ingresses", "ingresses/status"]
+  verbs: ["*"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create", "get", "list", "watch", "update"]
+- apiGroups: [""]
+  resources: ["endpoints", "pods", "services"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["namespaces", "nodes", "secrets"]
+  verbs: ["get", "list", "watch"]
+
+---
+# Source: istio/charts/pilot/templates/clusterrolebinding.yaml
+
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: istio-pilot-istio-system
+  labels:
+    app: istio-pilot
+    chart: pilot-0.8.0
+    heritage: Tiller
+    release: RELEASE-NAME
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: istio-pilot-istio-system
+subjects:
+  - kind: ServiceAccount
+    name: istio-pilot-service-account
+    namespace: istio-system
+
+---
+# Source: istio/charts/pilot/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: istio-pilot
+  namespace: istio-system
+  labels:
+    app: istio-pilot
+    chart: pilot-0.8.0
+    release: RELEASE-NAME
+    heritage: Tiller
+spec:
+  ports:
+  - port: 15003
+    name: http-old-discovery # mTLS or non-mTLS depending on auth setting
+  - port: 15005
+    name: https-discovery # always mTLS
+  - port: 15007
+    name: http-discovery # always plain-text
+  - port: 15010
+    name: grpc-xds # direct
+  - port: 15011
+    name: https-xds # mTLS
+  - port: 8080
+    name: http-legacy-discovery # direct
+  - port: 9093
+    name: http-monitoring
+  selector:
+    istio: pilot
+
+---
+
+# Source: istio/charts/ingressgateway/templates/deployment.yaml
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: istio-ingressgateway
+  namespace: istio-system
+  labels:
+    app: ingressgateway
+    chart: ingressgateway-0.8.0
+    release: RELEASE-NAME
+    heritage: Tiller
+    istio: ingressgateway
+spec:
+  replicas:
+  template:
+    metadata:
+      labels:
+        istio: ingressgateway
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      serviceAccountName: istio-ingressgateway-service-account
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: ingressgateway
+          image: "docker.io/istio/proxyv2:0.8.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+            - containerPort: 443
+            - containerPort: 31400
+          args:
+          - proxy
+          - router
+          - -v
+          - "2"
+          - --discoveryRefreshDelay
+          - '1s' #discoveryRefreshDelay
+          - --drainDuration
+          - '45s' #drainDuration
+          - --parentShutdownDuration
+          - '1m0s' #parentShutdownDuration
+          - --connectTimeout
+          - '10s' #connectTimeout
+          - --serviceCluster
+          - istio-ingressgateway
+          #- --zipkinAddress
+          #- zipkin:9411
+          #- --statsdUdpAddress
+          #- istio-statsd-prom-bridge:9125
+          - --proxyAdminPort
+          - "15000"
+          - --controlPlaneAuthPolicy
+          - NONE
+          - --discoveryAddress
+          - istio-pilot:8080
+          resources:
+            {}
+
+          env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+          - name: INSTANCE_IP
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: status.podIP
+          - name: ISTIO_META_POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          volumeMounts:
+          - name: istio-certs
+            mountPath: /etc/certs
+            readOnly: true
+          - name: ingressgateway-certs
+            mountPath: "/etc/istio/ingressgateway-certs"
+            readOnly: true
+      volumes:
+      - name: istio-certs
+        secret:
+          secretName: "istio.default"
+          optional: true
+      - name: ingressgateway-certs
+        secret:
+          secretName: "istio-ingressgateway-certs"
+          optional: true
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+                - ppc64le
+                - s390x
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 2
+            preference:
+              matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+          - weight: 2
+            preference:
+              matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - ppc64le
+          - weight: 2
+            preference:
+              matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - s390x
+
+---
+# Source: istio/charts/pilot/templates/deployment.yaml
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: istio-pilot
+  namespace: istio-system
+  # TODO: default tempate doesn't have this, which one is right ?
+  labels:
+    app: istio-pilot
+    chart: pilot-0.8.0
+    release: RELEASE-NAME
+    heritage: Tiller
+    istio: pilot
+  annotations:
+    checksum/config-volume: f8da08b6b8c170dde721efd680270b2901e750d4aa186ebb6c22bef5b78a43f9
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        istio: pilot
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      serviceAccountName: istio-pilot-service-account
+      containers:
+        - name: discovery
+          image: "docker.io/istio/pilot:0.8.0"
+          imagePullPolicy: IfNotPresent
+          args:
+          - "discovery"
+# TODO(sdake) remove when secrets are automagically registered
+          ports:
+          - containerPort: 8080
+          - containerPort: 15010
+          readinessProbe:
+            httpGet:
+              path: /v1/registration
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+          - name: PILOT_THROTTLE
+            value: "500"
+          - name: PILOT_CACHE_SQUASH
+            value: "5"
+          resources:
+            {}
+
+          volumeMounts:
+          - name: config-volume
+            mountPath: /etc/istio/config
+          - name: istio-certs
+            mountPath: /etc/certs
+            readOnly: true
+        - name: istio-proxy
+          image: "docker.io/istio/proxyv2:0.8.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+          - containerPort: 15003
+          - containerPort: 15005
+          - containerPort: 15007
+          - containerPort: 15011
+          args:
+          - proxy
+          - --serviceCluster
+          - istio-pilot
+          - --templateFile
+          - /etc/istio/proxy/envoy_pilot.yaml.tmpl
+          - --controlPlaneAuthPolicy
+          - NONE
+          env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.namespace
+          - name: INSTANCE_IP
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: status.podIP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+          volumeMounts:
+          - name: istio-certs
+            mountPath: /etc/certs
+            readOnly: true
+      volumes:
+      - name: config-volume
+        configMap:
+          name: istio
+      - name: istio-certs
+        secret:
+          secretName: "istio.istio-pilot-service-account"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+                - ppc64le
+                - s390x
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 2
+            preference:
+              matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+          - weight: 2
+            preference:
+              matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - ppc64le
+          - weight: 2
+            preference:
+              matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - s390x
+---
+# Source: istio/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: istio
+  namespace: istio-system
+  labels:
+    app: istio
+    chart: istio-0.8.0
+    release: RELEASE-NAME
+    heritage: Tiller
+data:
+  mesh: |-
+    #
+    # Edit this list to avoid using mTLS to connect to these services.
+    # Typically, these are control services (e.g kubernetes API server) that don't have istio sidecar
+    # to transparently terminate mTLS authentication.
+    # mtlsExcludedServices: ["kubernetes.default.svc.cluster.local"]
+
+    # Set the following variable to true to disable policy checks by the Mixer.
+    # Note that metrics will still be reported to the Mixer.
+    disablePolicyChecks: true
+    # Set enableTracing to false to disable request tracing.
+    enableTracing: false
+    #
+    # To disable the mixer completely (including metrics), comment out
+    # the following lines
+    #mixerCheckServer: istio-policy.istio-system.svc.cluster.local:15004
+    #mixerReportServer: istio-telemetry.istio-system.svc.cluster.local:15004
+    # This is the ingress service name, update if you used a different name
+    ingressService: istio-ingress
+    #
+    # Along with discoveryRefreshDelay, this setting determines how
+    # frequently should Envoy fetch and update its internal configuration
+    # from istio Pilot. Lower refresh delay results in higher CPU
+    # utilization and potential performance loss in exchange for faster
+    # convergence. Tweak this value according to your setup.
+    rdsRefreshDelay: 10s
+    #
+    defaultConfig:
+      # NOTE: If you change any values in this section, make sure to make
+      # the same changes in start up args in istio-ingress pods.
+      # See rdsRefreshDelay for explanation about this setting.
+      discoveryRefreshDelay: 10s
+      #
+      # TCP connection timeout between Envoy & the application, and between Envoys.
+      connectTimeout: 10s
+      #
+      ### ADVANCED SETTINGS #############
+      # Where should envoy's configuration be stored in the istio-proxy container
+      configPath: "/etc/istio/proxy"
+      binaryPath: "/usr/local/bin/envoy"
+      # The pseudo service name used for Envoy.
+      serviceCluster: istio-proxy
+      # These settings that determine how long an old Envoy
+      # process should be kept alive after an occasional reload.
+      drainDuration: 45s
+      parentShutdownDuration: 1m0s
+      #
+      # The mode used to redirect inbound connections to Envoy. This setting
+      # has no effect on outbound traffic: iptables REDIRECT is always used for
+      # outbound connections.
+      # If "REDIRECT", use iptables REDIRECT to NAT and redirect to Envoy.
+      # The "REDIRECT" mode loses source addresses during redirection.
+      # If "TPROXY", use iptables TPROXY to redirect to Envoy.
+      # The "TPROXY" mode preserves both the source and destination IP
+      # addresses and ports, so that they can be used for advanced filtering
+      # and manipulation.
+      # The "TPROXY" mode also configures the sidecar to run with the
+      # CAP_NET_ADMIN capability, which is required to use TPROXY.
+      #interceptionMode: REDIRECT
+      #
+      # Port where Envoy listens (on local host) for admin commands
+      # You can exec into the istio-proxy container in a pod and
+      # curl the admin port (curl http://localhost:15000/) to obtain
+      # diagnostic information from Envoy. See
+      # https://lyft.github.io/envoy/docs/operations/admin.html
+      # for more details
+      proxyAdminPort: 15000
+      #
+      # Zipkin trace collector
+      zipkinAddress: zipkin.istio-system:9411
+      #
+      # Statsd metrics collector converts statsd metrics into Prometheus metrics.
+      statsdUdpAddress: istio-statsd-prom-bridge.istio-system:9125
+      #
+      # Mutual TLS authentication between sidecars and istio control plane.
+      controlPlaneAuthPolicy: NONE
+      #
+      # Address where istio Pilot service is running
+      discoveryAddress: istio-pilot.istio-system:15007
+
+---
+# Source: istio/charts/security/templates/serviceaccount.yaml
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: istio-citadel-service-account
+  namespace: istio-system
+  labels:
+    app: security
+    chart: security-0.8.0
+    heritage: Tiller
+    release: RELEASE-NAME
+
+---
+# Source: istio/charts/security/templates/clusterrole.yaml
+
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  name: istio-citadel-istio-system
+  namespace: istio-system
+  labels:
+    app: security
+    chart: security-0.8.0
+    heritage: Tiller
+    release: RELEASE-NAME
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create", "get", "watch", "list", "update", "delete"]
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "watch", "list"]
+
+---
+# Source: istio/charts/security/templates/clusterrolebinding.yaml
+
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: istio-citadel-istio-system
+  labels:
+    app: security
+    chart: security-0.8.0
+    heritage: Tiller
+    release: RELEASE-NAME
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: istio-citadel-istio-system
+subjects:
+  - kind: ServiceAccount
+    name: istio-citadel-service-account
+    namespace: istio-system
+
+---
+# Source: istio/charts/ingressgateway/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: istio-ingressgateway
+  namespace: istio-system
+  labels:
+    chart: ingressgateway-0.8.0
+    release: RELEASE-NAME
+    heritage: Tiller
+    istio: ingressgateway
+spec:
+  type: LoadBalancer
+  selector:
+    istio: ingressgateway
+  ports:
+    -
+      name: http
+      nodePort: 31380
+      port: 80
+    -
+      name: https
+      nodePort: 31390
+      port: 443
+    -
+      name: tcp
+      nodePort: 31400
+      port: 31400
+
+---
+
+# Source: istio/charts/security/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  # we use the normal name here (e.g. 'prometheus')
+  # as grafana is configured to use this as a data source
+  name: istio-citadel
+  namespace: istio-system
+  labels:
+    app: istio-citadel
+spec:
+  ports:
+    - name: grpc-citadel
+      port: 8060
+      targetPort: 8060
+      protocol: TCP
+    - name: http-monitoring
+      port: 9093
+  selector:
+    istio: citadel
+
+---
+# Source: istio/charts/security/templates/deployment.yaml
+# istio CA watching all namespaces
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: istio-citadel
+  namespace: istio-system
+  labels:
+    app: security
+    chart: security-0.8.0
+    release: RELEASE-NAME
+    heritage: Tiller
+    istio: citadel
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        istio: citadel
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      serviceAccountName: istio-citadel-service-account
+      containers:
+        - name: citadel
+          image: "docker.io/istio/citadel:0.8.0"
+          imagePullPolicy: IfNotPresent
+          args:
+            - --append-dns-names=true
+            - --grpc-port=8060
+            - --grpc-hostname=citadel
+            - --self-signed-ca=true
+            - --citadel-storage-namespace=istio-system
+          resources:
+            {}
+
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+                - ppc64le
+                - s390x
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 2
+            preference:
+              matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+          - weight: 2
+            preference:
+              matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - ppc64le
+          - weight: 2
+            preference:
+              matchExpressions:
+              - key: beta.kubernetes.io/arch
+                operator: In
+                values:
+                - s390x
+
